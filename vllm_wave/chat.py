@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterator
 
 import httpx
+from rich.align import Align
+from rich.markdown import Markdown
 from rich.panel import Panel
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+
+# Full chat redraw cost scales with history; throttle during streaming token delivery.
+_STREAM_UI_MIN_INTERVAL_SEC = 0.08
 
 
 @dataclass
@@ -127,6 +133,7 @@ class AiChatApp(App[None]):
         self._streaming = False
         self._cancel_stream = False
         self._active_response_parts: list[str] = []
+        self._last_stream_render_mono: float = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -189,7 +196,7 @@ class AiChatApp(App[None]):
         if session.system_prompt:
             log.write(
                 Panel(
-                    session.system_prompt,
+                    Markdown(session.system_prompt),
                     title="System",
                     border_style="yellow",
                     expand=True,
@@ -197,13 +204,28 @@ class AiChatApp(App[None]):
             )
         for msg in session.messages:
             if msg.role == "user":
-                log.write(Panel(msg.content, title="You", border_style="cyan", expand=True))
+                md = Markdown(msg.content)
+                panel = Panel(
+                    md,
+                    title="You",
+                    border_style="cyan",
+                    expand=False,
+                    title_align="right",
+                )
+                # Render user's messages right-aligned, like common chat apps.
+                log.write(Align(panel, align="right"))
             elif msg.role == "assistant":
+                md = Markdown(msg.content or "...")
                 log.write(
-                    Panel(msg.content or "...", title="Assistant", border_style="magenta", expand=True)
+                    Panel(
+                        md,
+                        title="Assistant",
+                        border_style="magenta",
+                        expand=True,
+                    )
                 )
             else:
-                log.write(Panel(msg.content, title=msg.role.title(), expand=True))
+                log.write(Panel(Markdown(msg.content), title=msg.role.title(), expand=True))
 
     def _payload_messages(self, session: ChatSession) -> list[dict]:
         payload: list[dict] = []
@@ -283,6 +305,7 @@ class AiChatApp(App[None]):
         self._streaming = True
         self._cancel_stream = False
         self._active_response_parts = []
+        self._last_stream_render_mono = 0.0
         self.query_one("#btn_send", Button).disabled = True
         self.query_one("#btn_stop", Button).disabled = False
         self._render_active_chat()
@@ -316,7 +339,15 @@ class AiChatApp(App[None]):
         self._active_response_parts.append(piece)
         session.messages[-1].content = "".join(self._active_response_parts)
         if session_idx == self.active_idx:
-            self._render_active_chat()
+            now = time.monotonic()
+            n_parts = len(self._active_response_parts)
+            first_chunk = n_parts == 1
+            if (
+                first_chunk
+                or now - self._last_stream_render_mono >= _STREAM_UI_MIN_INTERVAL_SEC
+            ):
+                self._last_stream_render_mono = now
+                self._render_active_chat()
 
     def _finish_stream_with_error(self, session_idx: int, err: str) -> None:
         if 0 <= session_idx < len(self.sessions):

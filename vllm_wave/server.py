@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import socket
@@ -14,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,10 +71,62 @@ def api_ready_timeout() -> int:
     return max(1, timeout)
 
 
-def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.5)
-        return s.connect_ex((host, port)) == 0
+def client_connect_host(bind_host: str) -> str:
+    """
+    Hostname to use for local HTTP clients given the server's --host bind address.
+
+    Binds like 0.0.0.0 or :: mean "all interfaces"; we probe and chat via loopback.
+    """
+    h = (bind_host or "").strip()
+    if not h:
+        return "127.0.0.1"
+    low = h.lower()
+    if low == "0.0.0.0":
+        return "127.0.0.1"
+    if low in ("::", "[::]"):
+        return "::1"
+    return h
+
+
+def api_base_url(bind_host: str, port: int) -> str:
+    """Base URL (no trailing slash) for OpenAI-compatible routes on this machine."""
+    host = client_connect_host(bind_host)
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def port_in_use(port: int, bind_host: str | None = None) -> bool:
+    connect_host = client_connect_host(
+        bind_host if bind_host is not None else default_host()
+    )
+    try:
+        sock = socket.create_connection((connect_host, port), timeout=0.5)
+    except OSError:
+        return False
+    try:
+        sock.close()
+    except OSError:
+        pass
+    return True
+
+
+def tool_call_parser_for_run(
+    *, force_off: bool, explicit_override: str | None
+) -> str | None:
+    """
+    Resolve which tool-call parser to pass to vllm-mlx, if any.
+
+    When force_off is True, never pass tool flags.
+    When explicit_override is non-empty, it wins over VLLM_TOOL_CALL_PARSER.
+    Otherwise use VLLM_TOOL_CALL_PARSER when set; omit flags when unset (default).
+    """
+    if force_off:
+        return None
+    if explicit_override is not None and explicit_override.strip():
+        return explicit_override.strip()
+    env = os.environ.get("VLLM_TOOL_CALL_PARSER", "").strip()
+    return env or None
 
 
 def _stderr_reader(proc: subprocess.Popen[str], lines: deque[str]) -> None:
@@ -81,7 +136,7 @@ def _stderr_reader(proc: subprocess.Popen[str], lines: deque[str]) -> None:
         for line in proc.stderr:
             lines.append(line.rstrip("\n\r"))
     except Exception:
-        pass
+        logger.debug("stderr reader exited with error", exc_info=True)
 
 
 def build_serve_argv(
@@ -90,6 +145,7 @@ def build_serve_argv(
     port: int,
     cache_memory_percent: float,
     mllm: bool,
+    tool_call_parser: str | None = None,
 ) -> list[str]:
     cmd = [
         vllm_bin(),
@@ -99,12 +155,13 @@ def build_serve_argv(
         host,
         "--port",
         str(port),
-        "--enable-auto-tool-choice",
-        "--tool-call-parser",
-        "qwen3_coder",
         "--cache-memory-percent",
         str(cache_memory_percent),
     ]
+    if tool_call_parser:
+        cmd.extend(
+            ["--enable-auto-tool-choice", "--tool-call-parser", tool_call_parser]
+        )
     if mllm:
         cmd.append("--mllm")
     return cmd
@@ -116,11 +173,14 @@ def start_vllm(
     port: int,
     cache_memory_percent: float,
     mllm: bool,
+    tool_call_parser: str | None = None,
     stderr_lines: deque[str] | None = None,
 ) -> tuple[subprocess.Popen[str], deque[str]]:
     lines = stderr_lines if stderr_lines is not None else deque(maxlen=200)
     proc = subprocess.Popen(
-        build_serve_argv(model, host, port, cache_memory_percent, mllm),
+        build_serve_argv(
+            model, host, port, cache_memory_percent, mllm, tool_call_parser
+        ),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -134,12 +194,12 @@ def start_vllm(
 
 
 def wait_for_models_endpoint(
-    port: int,
+    base_url: str,
     timeout_sec: int,
     proc: subprocess.Popen[str],
     on_tick: Callable[[int], None] | None = None,
 ) -> bool:
-    url = f"http://127.0.0.1:{port}/v1/models"
+    url = base_url.rstrip("/") + "/v1/models"
     deadline = time.monotonic() + timeout_sec
     i = 0
     while time.monotonic() < deadline:
@@ -198,9 +258,9 @@ def wait_for_ngrok_url(sleep_sec: float = 5.0, retries: int = 6) -> str | None:
     return None
 
 
-def first_model_id_from_api(port: int) -> str | None:
+def first_model_id_from_api(base_url: str) -> str | None:
     try:
-        r = httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=5.0)
+        r = httpx.get(base_url.rstrip("/") + "/v1/models", timeout=5.0)
         r.raise_for_status()
         body = r.json()
         data = body.get("data") or []
@@ -219,3 +279,52 @@ def ensure_vllm_on_path() -> str | None:
     if shutil.which(b):
         return None
     return f"'{b}' not found on PATH (set VLLM_MLX_BIN)."
+
+
+_GGUF_UNSUPPORTED_MSG = (
+    "vllm-mlx loads weights via mlx_lm, which expects `*.safetensors` (HF/MLX layout). "
+    "GGUF weights are not supported. Use an MLX or safetensors model directory / Hub id, "
+    "or run GGUF models with a GGUF-native runtime (e.g. llama.cpp, LM Studio)."
+)
+
+
+def _dir_has_extension(d: str, suffix: str) -> bool:
+    suffix = suffix.lower()
+    try:
+        for name in os.listdir(d):
+            if name.lower().endswith(suffix) and os.path.isfile(os.path.join(d, name)):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def resolve_model_arg_for_vllm_serve(model: str) -> tuple[str, str | None]:
+    """
+    Validate local paths before spawning vllm-mlx.
+
+    mlx_lm requires a model directory with `config.json` and `*.safetensors` weights.
+    GGUF-only paths are rejected up front.
+    """
+    m = (model or "").strip()
+    if not m:
+        return m, None
+
+    if os.path.isfile(m) and m.lower().endswith(".gguf"):
+        return m, _GGUF_UNSUPPORTED_MSG
+
+    if os.path.isdir(m):
+        cfg = os.path.join(m, "config.json")
+        if not os.path.isfile(cfg):
+            return (
+                m,
+                "Selected model directory is missing `config.json`, which `vllm-mlx` requires. "
+                "Use an MLX/Hugging Face model directory that includes config/tokenizer files.",
+            )
+        has_st = _dir_has_extension(m, ".safetensors")
+        has_gguf = _dir_has_extension(m, ".gguf")
+        if has_gguf and not has_st:
+            return m, _GGUF_UNSUPPORTED_MSG
+        return m, None
+
+    return m, None

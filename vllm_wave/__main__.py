@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections import deque
 from typing import Any
 
 from vllm_wave.app import VllmHarnessApp, WizardResult
@@ -14,6 +15,7 @@ from vllm_wave.cache import discover_cached_models
 from vllm_wave.chat import run_interactive_chat
 from vllm_wave.server import (
     ServerHandles,
+    api_base_url,
     api_ready_timeout,
     default_host,
     default_port,
@@ -22,6 +24,8 @@ from vllm_wave.server import (
     port_in_use,
     start_ngrok,
     start_vllm,
+    resolve_model_arg_for_vllm_serve,
+    tool_call_parser_for_run,
     wait_for_models_endpoint,
     wait_for_ngrok_url,
 )
@@ -45,22 +49,34 @@ def _boot_cli(
     cache_pct: float,
     mllm: bool,
     want_ngrok: bool,
+    tool_call_parser: str | None,
 ) -> tuple[ServerHandles, str, str, str | None]:
     err = ensure_vllm_on_path()
     if err:
         print(err, file=sys.stderr)
         sys.exit(1)
-    if port_in_use(port):
+    if port_in_use(port, host):
         print(f"Port {port} in use (set VLLM_PORT).", file=sys.stderr)
         sys.exit(1)
-    from collections import deque
+
+    model_for_serve, resolution_err = resolve_model_arg_for_vllm_serve(model)
+    if resolution_err:
+        print(resolution_err, file=sys.stderr)
+        sys.exit(2)
 
     stderr_buf: deque[str] = deque(maxlen=200)
     proc, lines = start_vllm(
-        model, host, port, cache_pct, mllm, stderr_lines=stderr_buf
+        model_for_serve,
+        host,
+        port,
+        cache_pct,
+        mllm,
+        tool_call_parser=tool_call_parser,
+        stderr_lines=stderr_buf,
     )
     timeout = api_ready_timeout()
-    ok = wait_for_models_endpoint(port, timeout, proc, on_tick=lambda _i: None)
+    base = api_base_url(host, port)
+    ok = wait_for_models_endpoint(base, timeout, proc, on_tick=lambda _i: None)
     if not ok:
         proc.terminate()
         try:
@@ -86,14 +102,15 @@ def _boot_cli(
                 ngrok_hint = f"Public: {ngrok_url}/v1"
             else:
                 ngrok_hint = "Ngrok running; see http://127.0.0.1:4040"
-    chat_id = first_model_id_from_api(port) or os.path.basename(model.rstrip("/"))
+    chat_id = first_model_id_from_api(base) or os.path.basename(
+        model_for_serve.rstrip("/")
+    )
     handles = ServerHandles(
         vllm=proc,
         ngrok=ngrok_proc,
         ngrok_public_url=ngrok_url,
         stderr_lines=lines,
     )
-    base = f"http://127.0.0.1:{port}"
     return handles, base, chat_id, ngrok_hint
 
 
@@ -122,7 +139,28 @@ def main() -> None:
         action="store_true",
         help="After server is ready, do not start interactive chat",
     )
+    p.add_argument(
+        "--tool-parser",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Enable auto tool choice with this vLLM parser name "
+            "(overrides VLLM_TOOL_CALL_PARSER; e.g. qwen3_coder)"
+        ),
+    )
+    p.add_argument(
+        "--no-tool-parser",
+        action="store_true",
+        help="Do not pass tool-call flags (ignores VLLM_TOOL_CALL_PARSER)",
+    )
     args = p.parse_args()
+
+    if args.no_tool_parser and args.tool_parser is not None:
+        print(
+            "Use only one of --no-tool-parser and --tool-parser.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     handles_holder: dict[str, Any] = {"handles": None}
 
@@ -140,8 +178,12 @@ def main() -> None:
             sys.exit(2)
         port = default_port()
         host = default_host()
+        tparser = tool_call_parser_for_run(
+            force_off=args.no_tool_parser,
+            explicit_override=args.tool_parser,
+        )
         handles, base, chat_id, hint = _boot_cli(
-            model, host, port, pct, args.mllm, args.ngrok
+            model, host, port, pct, args.mllm, args.ngrok, tparser
         )
         handles_holder["handles"] = handles
         _install_cleanup(handles_holder)
@@ -157,7 +199,11 @@ def main() -> None:
         return
 
     models = discover_cached_models()
-    app = VllmHarnessApp(models)
+    app = VllmHarnessApp(
+        models,
+        cli_tool_parser=args.tool_parser,
+        cli_no_tool_parser=args.no_tool_parser,
+    )
     result: WizardResult | None = app.run()
 
     if result is None:

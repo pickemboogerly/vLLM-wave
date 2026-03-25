@@ -1,11 +1,14 @@
-"""Discover locally cached Hugging Face Hub model snapshots (same logic as start_ai_cached_models.sh)."""
+"""Discover locally cached Hugging Face Hub model snapshots."""
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,10 @@ def _decode_models_folder(folder_name: str) -> str:
     if folder_name.startswith("models--"):
         return folder_name[len("models--") :].replace("--", "/")
     return folder_name
+
+
+def _safe_label(s: str) -> str:
+    return s.replace("\t", " ").replace("\n", " ")
 
 
 def discover_cached_models(cache_dir: str | None = None) -> list[CachedModel]:
@@ -55,7 +62,10 @@ def discover_cached_models(cache_dir: str | None = None) -> list[CachedModel]:
                             }
                         )
         except Exception:
-            pass
+            logger.debug(
+                "huggingface_hub.scan_cache_dir failed; falling back to find",
+                exc_info=True,
+            )
 
     if not rows:
         try:
@@ -128,6 +138,6 @@ def discover_cached_models(cache_dir: str | None = None) -> list[CachedModel]:
             label = f"{rid} ({short})"
         else:
             label = rid
-        label = label.replace("\t", " ").replace("\n", " ")
+        label = _safe_label(label)
         out.append(CachedModel(label=label, path=r["path"]))
     return out

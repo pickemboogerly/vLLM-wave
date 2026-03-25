@@ -15,6 +15,7 @@ from vllm_mlx_tui.chat import run_interactive_chat
 from vllm_mlx_tui.server import (
     ServerHandles,
     api_ready_timeout,
+    default_host,
     default_port,
     ensure_vllm_on_path,
     first_model_id_from_api,
@@ -39,6 +40,7 @@ def _install_cleanup(handles_holder: dict[str, Any]) -> None:
 
 def _boot_cli(
     model: str,
+    host: str,
     port: int,
     cache_pct: float,
     mllm: bool,
@@ -54,7 +56,9 @@ def _boot_cli(
     from collections import deque
 
     stderr_buf: deque[str] = deque(maxlen=200)
-    proc, lines = start_vllm(model, port, cache_pct, mllm, stderr_lines=stderr_buf)
+    proc, lines = start_vllm(
+        model, host, port, cache_pct, mllm, stderr_lines=stderr_buf
+    )
     timeout = api_ready_timeout()
     ok = wait_for_models_endpoint(port, timeout, proc, on_tick=lambda _i: None)
     if not ok:
@@ -135,8 +139,9 @@ def main() -> None:
             print("--cache-pct must be between 0 and 1.", file=sys.stderr)
             sys.exit(2)
         port = default_port()
+        host = default_host()
         handles, base, chat_id, hint = _boot_cli(
-            model, port, pct, args.mllm, args.ngrok
+            model, host, port, pct, args.mllm, args.ngrok
         )
         handles_holder["handles"] = handles
         _install_cleanup(handles_holder)

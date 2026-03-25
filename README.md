@@ -58,6 +58,7 @@ Use `--model` or set `DEFAULT_MODEL` to a Hub id or absolute snapshot path.
 |----------|------|
 | `HF_HUB_CACHE` / `HF_HOME` | Hub cache root (see [HF cache docs](https://huggingface.co/docs/huggingface_hub/guides/manage-cache)) |
 | `VLLM_PORT` | API port (default `8001`) |
+| `VLLM_HOST` | Bind host for the server (default `127.0.0.1`) |
 | `VLLM_MLX_BIN` | Server binary name or path (default `vllm-mlx`) |
 | `API_READY_TIMEOUT` | Seconds to wait for `/v1/models` (default `120`) |
 | `DEFAULT_MODEL` | Prefill manual model field in the TUI, or default for `--no-tui` |

@@ -27,6 +27,7 @@ from vllm_mlx_tui.cache import CachedModel
 from vllm_mlx_tui.server import (
     ServerHandles,
     api_ready_timeout,
+    default_host,
     default_port,
     ensure_vllm_on_path,
     first_model_id_from_api,
@@ -97,7 +98,7 @@ class VllmHarnessApp(App[WizardResult | None]):
         for i, m in enumerate(self.models):
             table.add_row(m.label, m.path, key=str(i))
         if self.models:
-            table.cursor_row = 0
+            table.move_cursor(row=0)
         self.set_interval(0.35, self._drain_stderr_log)
 
     def _drain_stderr_log(self) -> None:
@@ -128,6 +129,7 @@ class VllmHarnessApp(App[WizardResult | None]):
             self.query_one("#boot_log", RichLog).write(f"[red]{err}[/red]")
             return
         port = default_port()
+        host = default_host()
         if port_in_use(port):
             self.query_one("#boot_log", RichLog).write(
                 f"[red]Port {port} is in use (set VLLM_PORT).[/red]"
@@ -169,12 +171,13 @@ class VllmHarnessApp(App[WizardResult | None]):
         self._boot_stderr.clear()
         self.query_one("#btn_start", Button).disabled = True
         self.query_one("#btn_quit", Button).disabled = True
-        self._boot_worker(model_path, port, cache_pct, mllm, ngrok)
+        self._boot_worker(model_path, host, port, cache_pct, mllm, ngrok)
 
     @work(thread=True, exclusive=True, name="boot", exit_on_error=False)
     def _boot_worker(
         self,
         model_path: str,
+        host: str,
         port: int,
         cache_pct: float,
         mllm: bool,
@@ -182,6 +185,7 @@ class VllmHarnessApp(App[WizardResult | None]):
     ) -> WizardResult | str:
         proc, lines = start_vllm(
             model_path,
+            host,
             port,
             cache_pct,
             mllm,

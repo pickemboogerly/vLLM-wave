@@ -21,6 +21,7 @@ set -euo pipefail
 #DEFAULT_MODEL="mlx-community/Qwen3.5-27B-heretic-8bit"
 
 PORT="${VLLM_PORT:-8001}"
+HOST="${VLLM_HOST:-127.0.0.1}"
 VLLM_BIN="${VLLM_MLX_BIN:-vllm-mlx}"
 # Max seconds to wait for /v1/models after starting the server
 API_READY_TIMEOUT="${API_READY_TIMEOUT:-120}"
@@ -277,7 +278,7 @@ fi
 # "${arr[@]}" with set -u errors on empty array (bash); use conditional expansion.
 "$VLLM_BIN" serve "$MODEL" \
   "${VLLM_EXTRA[@]+"${VLLM_EXTRA[@]}"}" \
-  --host 0.0.0.0 \
+  --host "$HOST" \
   --port "$PORT" \
   --enable-auto-tool-choice \
   --tool-call-parser qwen3_coder \

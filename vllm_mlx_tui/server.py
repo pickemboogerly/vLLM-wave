@@ -39,7 +39,20 @@ class ServerHandles:
 
 
 def default_port() -> int:
-    return int(os.environ.get("VLLM_PORT", "8001"))
+    raw = os.environ.get("VLLM_PORT", "8001")
+    try:
+        port = int(raw)
+    except ValueError:
+        return 8001
+    if 1 <= port <= 65535:
+        return port
+    return 8001
+
+
+def default_host() -> str:
+    # Localhost by default to avoid accidental LAN exposure.
+    host = os.environ.get("VLLM_HOST", "127.0.0.1").strip()
+    return host or "127.0.0.1"
 
 
 def vllm_bin() -> str:
@@ -47,7 +60,12 @@ def vllm_bin() -> str:
 
 
 def api_ready_timeout() -> int:
-    return int(os.environ.get("API_READY_TIMEOUT", "120"))
+    raw = os.environ.get("API_READY_TIMEOUT", "120")
+    try:
+        timeout = int(raw)
+    except ValueError:
+        return 120
+    return max(1, timeout)
 
 
 def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
@@ -68,6 +86,7 @@ def _stderr_reader(proc: subprocess.Popen[str], lines: deque[str]) -> None:
 
 def build_serve_argv(
     model: str,
+    host: str,
     port: int,
     cache_memory_percent: float,
     mllm: bool,
@@ -77,7 +96,7 @@ def build_serve_argv(
         "serve",
         model,
         "--host",
-        "0.0.0.0",
+        host,
         "--port",
         str(port),
         "--enable-auto-tool-choice",
@@ -93,6 +112,7 @@ def build_serve_argv(
 
 def start_vllm(
     model: str,
+    host: str,
     port: int,
     cache_memory_percent: float,
     mllm: bool,
@@ -100,7 +120,7 @@ def start_vllm(
 ) -> tuple[subprocess.Popen[str], deque[str]]:
     lines = stderr_lines if stderr_lines is not None else deque(maxlen=200)
     proc = subprocess.Popen(
-        build_serve_argv(model, port, cache_memory_percent, mllm),
+        build_serve_argv(model, host, port, cache_memory_percent, mllm),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,

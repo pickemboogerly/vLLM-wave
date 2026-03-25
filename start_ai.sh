@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # Configuration
 #DEFAULT_MODEL="mlx-community/Qwen2.5-Coder-14B-Instruct-4bit"
 #DEFAULT_MODEL="mlx-community/Qwen3.5-27B-8bit"
@@ -15,9 +17,16 @@
 
 MODEL_DIR="$HOME/.cache/huggingface/hub/"
 PORT=8001
+HOST="${VLLM_HOST:-127.0.0.1}"
+VLLM_BIN="${VLLM_MLX_BIN:-vllm-mlx}"
 
 echo "🔍 Checking for local models under subdirectories of '$MODEL_DIR'..."
 MODEL="$DEFAULT_MODEL"
+
+if ! command -v "$VLLM_BIN" >/dev/null 2>&1; then
+  echo "Error: '$VLLM_BIN' not found on PATH (set VLLM_MLX_BIN to override)." >&2
+  exit 1
+fi
 
 if [ -d "$MODEL_DIR" ]; then
   MD="${MODEL_DIR%/}"
@@ -68,6 +77,10 @@ read -r -p "KV cache memory fraction (0-1) [${DEFAULT_CACHE_PCT}]: " CACHE_PCT
 if [ -z "$CACHE_PCT" ]; then
   CACHE_PCT="$DEFAULT_CACHE_PCT"
 fi
+if ! awk -v x="$CACHE_PCT" 'BEGIN { exit !(x+0 >= 0 && x+0 <= 1) }' </dev/null 2>/dev/null; then
+  echo "⚠️  Invalid cache fraction '$CACHE_PCT' (expected 0-1). Using ${DEFAULT_CACHE_PCT}."
+  CACHE_PCT="$DEFAULT_CACHE_PCT"
+fi
 
 # vLLM-MLX only auto-detects VL models from the id (e.g. -VL-). Checkpoints that still
 # include vision weights (language_model.vision_tower.*) need --mllm or loading fails.
@@ -92,6 +105,13 @@ if [ "$USE_NGROK_LOWER" = "y" ] || [ "$USE_NGROK_LOWER" = "yes" ]; then
   fi
 fi
 
+if command -v lsof >/dev/null 2>&1; then
+  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Error: something is already listening on port $PORT." >&2
+    exit 1
+  fi
+fi
+
 MLLM_TAG="off"
 if [ "$USE_MLLM_ENABLED" = true ]; then
   MLLM_TAG="on (--mllm)"
@@ -103,9 +123,9 @@ if [ "$USE_MLLM_ENABLED" = true ]; then
   VLLM_EXTRA+=(--mllm)
 fi
 # "${arr[@]}" with set -u errors on empty array (bash); use conditional expansion.
-vllm-mlx serve "$MODEL" \
+"$VLLM_BIN" serve "$MODEL" \
   "${VLLM_EXTRA[@]+"${VLLM_EXTRA[@]}"}" \
-  --host 0.0.0.0 \
+  --host "$HOST" \
   --port "$PORT" \
   --enable-auto-tool-choice \
   --tool-call-parser qwen3_coder \
@@ -127,14 +147,30 @@ if [ "$USE_NGROK_ENABLED" = true ]; then
   sleep 5 # Give ngrok a few seconds to establish the connection
 
   # Query ngrok's local API to grab the generated URL
-  NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*' | grep -o 'https://[^"]*')
+  NGROK_URL=$(python3 - <<'PY'
+import json
+import urllib.request
+
+try:
+    with urllib.request.urlopen("http://127.0.0.1:4040/api/tunnels", timeout=5) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+    tunnels = data.get("tunnels") or []
+    for t in tunnels:
+        u = t.get("public_url") or ""
+        if u.startswith("https://"):
+            print(u)
+            break
+except Exception:
+    pass
+PY
+)
 fi
 
 echo ""
 echo "========================================================"
 echo "✅ AI WORKSTATION ONLINE"
 echo "========================================================"
-echo "🏠 Local (VS Code): http://localhost:$PORT/v1"
+echo "🏠 Local (VS Code): http://127.0.0.1:$PORT/v1"
 if [ "$USE_NGROK_ENABLED" = true ]; then
   if [ -n "$NGROK_URL" ]; then
     echo "🌍 Public (Cursor): $NGROK_URL/v1"
@@ -149,7 +185,7 @@ echo "========================================================"
 echo "Press [Ctrl+C] to gracefully shut down the server${USE_NGROK_ENABLED:+ and ngrok}."
 
 # Trap Ctrl+C (SIGINT) to kill background processes cleanly
-trap 'echo -e "\n🛑 Shutting down vLLM and ngrok..."; kill "$VLLM_PID" ${NGROK_PID:+$NGROK_PID}; exit' SIGINT
+trap 'echo -e "\n🛑 Shutting down vLLM and ngrok..."; kill "$VLLM_PID" 2>/dev/null || true; if [ -n "${NGROK_PID:-}" ]; then kill "$NGROK_PID" 2>/dev/null || true; fi; exit' SIGINT
 
 # Keep the script running
 wait

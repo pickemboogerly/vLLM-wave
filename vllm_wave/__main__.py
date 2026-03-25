@@ -1,4 +1,4 @@
-"""CLI: TUI wizard or --no-tui pipeline, then optional minimal chat (handoff drops Textual)."""
+"""CLI for vLLM-wave: launcher wizard or --no-tui pipeline, then chat."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ import subprocess
 import sys
 from typing import Any
 
-from vllm_mlx_tui.app import VllmHarnessApp, WizardResult
-from vllm_mlx_tui.cache import discover_cached_models
-from vllm_mlx_tui.chat import run_interactive_chat
-from vllm_mlx_tui.server import (
+from vllm_wave.app import VllmHarnessApp, WizardResult
+from vllm_wave.cache import discover_cached_models
+from vllm_wave.chat import run_interactive_chat
+from vllm_wave.server import (
     ServerHandles,
     api_ready_timeout,
     default_host,
@@ -69,7 +69,7 @@ def _boot_cli(
             proc.kill()
         tail = "\n".join(list(lines)[-40:])
         print(
-            f"vLLM-MLX did not become ready in {timeout}s.\n{tail}",
+            f"vLLM-wave engine did not become ready in {timeout}s.\n{tail}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -98,7 +98,7 @@ def _boot_cli(
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="vLLM-MLX TUI harness")
+    p = argparse.ArgumentParser(description="vLLM-wave TUI harness")
     p.add_argument(
         "--no-tui",
         action="store_true",

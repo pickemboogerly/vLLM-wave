@@ -1,4 +1,4 @@
-"""Textual wizard: pick cached model, options, start vLLM-MLX, then exit for chat handoff."""
+"""vLLM-wave launcher: pick cached model, options, start engine, then hand off to chat."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from textual.widgets import (
 )
 from textual.worker import Worker, WorkerState
 
-from vllm_mlx_tui.cache import CachedModel
-from vllm_mlx_tui.server import (
+from vllm_wave.cache import CachedModel
+from vllm_wave.server import (
     ServerHandles,
     api_ready_timeout,
     default_host,
@@ -48,6 +48,7 @@ class WizardResult:
 
 
 class VllmHarnessApp(App[WizardResult | None]):
+    TITLE = "vLLM-wave"
     CSS = """
     Screen { align: center middle; }
     #main { width: 100%; height: 100%; padding: 1 2; }
@@ -200,7 +201,7 @@ class VllmHarnessApp(App[WizardResult | None]):
             except subprocess.TimeoutExpired:
                 proc.kill()
             tail = "\n".join(list(lines)[-30:])
-            return f"vLLM-MLX did not become ready in {timeout}s.\n{tail}"
+            return f"vLLM-wave engine did not become ready in {timeout}s.\n{tail}"
 
         ngrok_proc = None
         ngrok_url = None

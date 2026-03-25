@@ -1,8 +1,8 @@
-# local-ai
+# vLLM-wave
 
-Helpers for running **vLLM-MLX** on Apple Silicon with models from your local Hugging Face Hub cache.
+Helpers for running **vLLM-wave** on Apple Silicon with models from your local Hugging Face Hub cache.
 
-## TUI harness (`vllm_mlx_tui`)
+## TUI harness (vLLM-wave)
 
 A [Textual](https://textual.textualize.io/) wizard lists cached snapshot directories, lets you set KV memory fraction and multimodal (`--mllm`) / ngrok options, starts `vllm-mlx serve` in a **subprocess** (weights never load in the UI process), waits for `GET /v1/models`, then **hands off** to a small streaming chat client (`httpx` only) so memory stays lower during long chats.
 
@@ -15,7 +15,7 @@ A [Textual](https://textual.textualize.io/) wizard lists cached snapshot directo
 ### Install
 
 ```bash
-cd /path/to/local-ai
+cd /path/to/vllm-wave
 python3 -m venv .venv
 source .venv/bin/activate   # or .venv\Scripts\activate on Windows
 pip install -e .
@@ -26,9 +26,9 @@ pip install -e .
 **Interactive TUI** (recommended):
 
 ```bash
-python -m vllm_mlx_tui
+python -m vllm_wave
 # or, after install:
-vllm-mlx-tui
+vllm-wave
 # convenience script (uses .venv if present in this repo):
 ./start_ai_tui.sh
 ```
@@ -36,7 +36,7 @@ vllm-mlx-tui
 **Non-interactive** (scripting / CI):
 
 ```bash
-python -m vllm_mlx_tui --no-tui --model /path/to/hf/hub/snapshots/<hash>
+python -m vllm_wave --no-tui --model /path/to/hf/hub/snapshots/<hash>
 ```
 
 Use `--model` or set `DEFAULT_MODEL` to a Hub id or absolute snapshot path.
@@ -63,13 +63,12 @@ Use `--model` or set `DEFAULT_MODEL` to a Hub id or absolute snapshot path.
 | `API_READY_TIMEOUT` | Seconds to wait for `/v1/models` (default `120`) |
 | `DEFAULT_MODEL` | Prefill manual model field in the TUI, or default for `--no-tui` |
 
-### Shell scripts (legacy)
+### Shell scripts
 
-- `start_ai_cached_models.sh` — bash flow with HF cache discovery and `curl` readiness
-- `start_ai.sh` — simpler bash menu
+- `start_ai_tui.sh` — convenience wrapper to run the `vllm_wave` Textual launcher
 
-The Python TUI mirrors that behavior with a nicer terminal UI and a deliberate post-load chat handoff.
+The Python TUI provides a richer terminal UI and a deliberate post-load chat handoff.
 
 ## License
 
-Use and modify freely for local development; vLLM-MLX and model weights are subject to their own licenses.
+This project (the code) is licensed under the MIT License. Model weights and any third-party model assets are subject to their own licenses.

@@ -1,4 +1,4 @@
-"""Spawn vLLM-MLX, poll OpenAI-compatible /v1/models, optional ngrok."""
+"""Spawn the vLLM-wave engine, poll /v1/models, optional ngrok."""
 
 from __future__ import annotations
 

@@ -198,31 +198,35 @@ def main() -> None:
         handles.terminate_all()
         return
 
-    models = discover_cached_models()
-    app = VllmHarnessApp(
-        models,
-        cli_tool_parser=args.tool_parser,
-        cli_no_tool_parser=args.no_tool_parser,
-    )
-    result: WizardResult | None = app.run()
-
-    if result is None:
-        sys.exit(0)
-
-    handles_holder["handles"] = result.handles
     _install_cleanup(handles_holder)
+    while True:
+        models = discover_cached_models()
+        app = VllmHarnessApp(
+            models,
+            cli_tool_parser=args.tool_parser,
+            cli_no_tool_parser=args.no_tool_parser,
+        )
+        result: WizardResult | None = app.run()
 
-    print(f"\nLocal API: {result.base_url}/v1", file=sys.stderr)
-    if result.ngrok_hint:
-        print(result.ngrok_hint, file=sys.stderr)
+        if result is None:
+            sys.exit(0)
 
-    if args.skip_chat:
-        print("Server running. Ctrl+C to stop.", file=sys.stderr)
-        result.handles.vllm.wait()
-    else:
-        run_interactive_chat(result.base_url, result.chat_model_id)
+        handles_holder["handles"] = result.handles
+        print(f"\nLocal API: {result.base_url}/v1", file=sys.stderr)
+        if result.ngrok_hint:
+            print(result.ngrok_hint, file=sys.stderr)
 
-    result.handles.terminate_all()
+        if args.skip_chat:
+            print("Server running. Ctrl+C to stop.", file=sys.stderr)
+            result.handles.vllm.wait()
+            result.handles.terminate_all()
+            break
+
+        chat_exit_reason = run_interactive_chat(result.base_url, result.chat_model_id)
+        result.handles.terminate_all()
+        handles_holder["handles"] = None
+        if chat_exit_reason != "switch_model":
+            break
 
 
 if __name__ == "__main__":

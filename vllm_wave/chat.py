@@ -9,13 +9,20 @@ from datetime import datetime
 from typing import Iterator
 
 import httpx
-from rich.align import Align
-from rich.markdown import Markdown
-from rich.panel import Panel
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Markdown,
+    Static,
+)
 
 # Full chat redraw cost scales with history; throttle during streaming token delivery.
 _STREAM_UI_MIN_INTERVAL_SEC = 0.08
@@ -69,7 +76,19 @@ def stream_chat_chunks(
                         yield content
 
 
-class AiChatApp(App[None]):
+def _short_model_name(model: str) -> str:
+    raw = (model or "").strip()
+    if not raw:
+        return "(unknown)"
+    norm = raw.rstrip("/\\")
+    if "/" in norm:
+        return norm.split("/")[-1] or norm
+    if "\\" in norm:
+        return norm.split("\\")[-1] or norm
+    return norm
+
+
+class AiChatApp(App[str | None]):
     TITLE = "vLLM-wave"
     CSS = """
     Screen { background: #0f111a; }
@@ -106,6 +125,10 @@ class AiChatApp(App[None]):
         background: #0f1424;
         padding: 0 1;
     }
+    #chat_log Markdown {
+        background: transparent;
+        padding: 0 1;
+    }
     #composer {
         height: auto;
         border: round #2f3550;
@@ -121,13 +144,15 @@ class AiChatApp(App[None]):
     BINDINGS = [
         ("ctrl+n", "new_chat", "New chat"),
         ("ctrl+l", "clear_chat", "Clear chat"),
-        ("ctrl+c", "quit", "Quit"),
+        ("ctrl+r", "switch_model", "Switch model"),
+        ("ctrl+q", "quit", "Quit"),
     ]
 
     def __init__(self, base_url: str, model: str) -> None:
         super().__init__()
         self.base_url = base_url
         self.model = model
+        self.model_display = _short_model_name(model)
         self.sessions: list[ChatSession] = []
         self.active_idx = 0
         self._streaming = False
@@ -141,13 +166,17 @@ class AiChatApp(App[None]):
             with Vertical(id="sidebar"):
                 yield Static("vLLM-wave", id="brand")
                 yield Button("New Chat", id="btn_new", variant="primary")
+                yield Button("Switch Model", id="btn_switch_model", variant="warning")
                 yield ListView(id="sessions")
-                yield Label(f"Model: {self.model}", classes="meta")
-                yield Label("Ctrl+N new  Ctrl+L clear", classes="meta")
+                yield Label(f"Model: {self.model_display}", classes="meta")
+                yield Label("Ctrl+N new  Ctrl+L clear  Ctrl+R switch", classes="meta")
             with Vertical(id="main"):
                 yield Static("", id="topbar")
                 yield Static("", id="chat_title")
-                yield RichLog(id="chat_log", highlight=True, max_lines=4000)
+                yield VerticalScroll(
+                    Markdown("", id="chat_markdown"),
+                    id="chat_log",
+                )
                 with Vertical(id="composer"):
                     yield Input(
                         id="system_input",
@@ -161,7 +190,8 @@ class AiChatApp(App[None]):
                         yield Button("Send", id="btn_send", variant="success")
                         yield Button("Stop", id="btn_stop", variant="warning", disabled=True)
                         yield Button("Clear", id="btn_clear")
-                        yield Static("Esc/Ctrl+C to quit", classes="hint")
+                        yield Button("Copy", id="btn_copy")
+                        yield Static("Ctrl+C copy  Ctrl+Q quit", classes="hint")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -185,47 +215,36 @@ class AiChatApp(App[None]):
 
     def _update_header(self) -> None:
         self.query_one("#topbar", Static).update(
-            f"Endpoint: {self.base_url}/v1   |   Model: {self.model}"
+            f"Endpoint: {self.base_url}/v1   |   Model: {self.model_display}"
         )
 
     def _render_active_chat(self) -> None:
         session = self._current()
         self.query_one("#chat_title", Static).update(session.title)
-        log = self.query_one("#chat_log", RichLog)
-        log.clear()
+        parts: list[str] = []
         if session.system_prompt:
-            log.write(
-                Panel(
-                    Markdown(session.system_prompt),
-                    title="System",
-                    border_style="yellow",
-                    expand=True,
-                )
+            parts.append(
+                "### System\n\n"
+                + session.system_prompt.strip()
+                + "\n\n---\n"
             )
         for msg in session.messages:
             if msg.role == "user":
-                md = Markdown(msg.content)
-                panel = Panel(
-                    md,
-                    title="You",
-                    border_style="cyan",
-                    expand=False,
-                    title_align="right",
-                )
-                # Render user's messages right-aligned, like common chat apps.
-                log.write(Align(panel, align="right"))
+                parts.append("### You\n\n" + msg.content.strip() + "\n\n---\n")
             elif msg.role == "assistant":
-                md = Markdown(msg.content or "...")
-                log.write(
-                    Panel(
-                        md,
-                        title="Assistant",
-                        border_style="magenta",
-                        expand=True,
-                    )
-                )
+                body = (msg.content or "...").strip() or "..."
+                parts.append("### Assistant\n\n" + body + "\n\n---\n")
             else:
-                log.write(Panel(Markdown(msg.content), title=msg.role.title(), expand=True))
+                parts.append(
+                    f"### {msg.role.title()}\n\n"
+                    + msg.content.strip()
+                    + "\n\n---\n"
+                )
+        doc = "\n".join(parts).strip()
+        self.call_later(self._refresh_chat_markdown, doc)
+
+    async def _refresh_chat_markdown(self, markdown: str) -> None:
+        await self.query_one("#chat_markdown", Markdown).update(markdown)
 
     def _payload_messages(self, session: ChatSession) -> list[dict]:
         payload: list[dict] = []
@@ -247,6 +266,10 @@ class AiChatApp(App[None]):
             return
         self.action_clear_chat()
 
+    @on(Button.Pressed, "#btn_switch_model")
+    def on_switch_model_click(self) -> None:
+        self.action_switch_model()
+
     @on(Button.Pressed, "#btn_send")
     def on_send_click(self) -> None:
         self._send_message()
@@ -255,6 +278,10 @@ class AiChatApp(App[None]):
     def on_stop_click(self) -> None:
         if self._streaming:
             self._cancel_stream = True
+
+    @on(Button.Pressed, "#btn_copy")
+    def on_copy_click(self) -> None:
+        self.action_copy_selection()
 
     @on(Input.Submitted, "#msg_input")
     def on_msg_submit(self) -> None:
@@ -282,6 +309,16 @@ class AiChatApp(App[None]):
         session = self._current()
         session.messages.clear()
         self._render_active_chat()
+
+    def action_switch_model(self) -> None:
+        if self._streaming:
+            return
+        self.exit("switch_model")
+
+    def action_copy_selection(self) -> None:
+        text = self.screen.get_selected_text()
+        if text:
+            self.app.copy_to_clipboard(text)
 
     def _send_message(self) -> None:
         if self._streaming:
@@ -375,6 +412,6 @@ class AiChatApp(App[None]):
             self._render_active_chat()
 
 
-def run_interactive_chat(base_url: str, model: str) -> None:
+def run_interactive_chat(base_url: str, model: str) -> str | None:
     """Launch the richer Textual chat interface."""
-    AiChatApp(base_url, model).run()
+    return AiChatApp(base_url, model).run()

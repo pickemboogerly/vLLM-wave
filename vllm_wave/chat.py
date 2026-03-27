@@ -76,18 +76,6 @@ def stream_chat_chunks(
                         yield content
 
 
-def _short_model_name(model: str) -> str:
-    raw = (model or "").strip()
-    if not raw:
-        return "(unknown)"
-    norm = raw.rstrip("/\\")
-    if "/" in norm:
-        return norm.split("/")[-1] or norm
-    if "\\" in norm:
-        return norm.split("\\")[-1] or norm
-    return norm
-
-
 class AiChatApp(App[str | None]):
     TITLE = "vLLM-wave"
     CSS = """
@@ -148,11 +136,12 @@ class AiChatApp(App[str | None]):
         ("ctrl+q", "quit", "Quit"),
     ]
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(self, base_url: str, model: str, model_display: str | None = None) -> None:
         super().__init__()
         self.base_url = base_url
         self.model = model
-        self.model_display = _short_model_name(model)
+        shown = (model_display or model).strip()
+        self.model_display = shown or "(unknown)"
         self.sessions: list[ChatSession] = []
         self.active_idx = 0
         self._streaming = False
@@ -412,6 +401,8 @@ class AiChatApp(App[str | None]):
             self._render_active_chat()
 
 
-def run_interactive_chat(base_url: str, model: str) -> str | None:
+def run_interactive_chat(
+    base_url: str, model: str, model_display: str | None = None
+) -> str | None:
     """Launch the richer Textual chat interface."""
-    return AiChatApp(base_url, model).run()
+    return AiChatApp(base_url, model, model_display=model_display).run()

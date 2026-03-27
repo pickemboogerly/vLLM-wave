@@ -273,6 +273,29 @@ def first_model_id_from_api(base_url: str) -> str | None:
     return None
 
 
+def human_readable_model_name(model: str) -> str:
+    """
+    Build a readable model name for UI display.
+
+    For Hugging Face cache paths like:
+      .../models--org--name/snapshots/<hash>
+    return:
+      models--org/name
+    """
+    raw = (model or "").strip()
+    if not raw:
+        return "(unknown)"
+
+    norm = os.path.normpath(os.path.expanduser(raw))
+    marker = "models--"
+    for part in norm.split(os.sep):
+        if part.startswith(marker):
+            decoded = part[len(marker) :].replace("--", "/").strip("/")
+            if decoded:
+                return f"{marker}{decoded}"
+    return raw
+
+
 def ensure_vllm_on_path() -> str | None:
     """Return error message if binary missing, else None."""
     b = vllm_bin()

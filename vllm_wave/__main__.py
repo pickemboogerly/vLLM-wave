@@ -21,6 +21,7 @@ from vllm_wave.server import (
     default_port,
     ensure_vllm_on_path,
     first_model_id_from_api,
+    human_readable_model_name,
     port_in_use,
     start_ngrok,
     start_vllm,
@@ -50,7 +51,7 @@ def _boot_cli(
     mllm: bool,
     want_ngrok: bool,
     tool_call_parser: str | None,
-) -> tuple[ServerHandles, str, str, str | None]:
+) -> tuple[ServerHandles, str, str, str, str | None]:
     err = ensure_vllm_on_path()
     if err:
         print(err, file=sys.stderr)
@@ -105,13 +106,14 @@ def _boot_cli(
     chat_id = first_model_id_from_api(base) or os.path.basename(
         model_for_serve.rstrip("/")
     )
+    chat_display = human_readable_model_name(model_for_serve)
     handles = ServerHandles(
         vllm=proc,
         ngrok=ngrok_proc,
         ngrok_public_url=ngrok_url,
         stderr_lines=lines,
     )
-    return handles, base, chat_id, ngrok_hint
+    return handles, base, chat_id, chat_display, ngrok_hint
 
 
 def main() -> None:
@@ -182,7 +184,7 @@ def main() -> None:
             force_off=args.no_tool_parser,
             explicit_override=args.tool_parser,
         )
-        handles, base, chat_id, hint = _boot_cli(
+        handles, base, chat_id, chat_display, hint = _boot_cli(
             model, host, port, pct, args.mllm, args.ngrok, tparser
         )
         handles_holder["handles"] = handles
@@ -194,7 +196,7 @@ def main() -> None:
             print("Server running. Ctrl+C to stop.", file=sys.stderr)
             handles.vllm.wait()
         else:
-            run_interactive_chat(base, chat_id)
+            run_interactive_chat(base, chat_id, model_display=chat_display)
         handles.terminate_all()
         return
 
@@ -222,7 +224,11 @@ def main() -> None:
             result.handles.terminate_all()
             break
 
-        chat_exit_reason = run_interactive_chat(result.base_url, result.chat_model_id)
+        chat_exit_reason = run_interactive_chat(
+            result.base_url,
+            result.chat_model_id,
+            model_display=result.chat_model_display,
+        )
         result.handles.terminate_all()
         handles_holder["handles"] = None
         if chat_exit_reason != "switch_model":

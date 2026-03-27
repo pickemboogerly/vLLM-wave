@@ -33,6 +33,7 @@ from vllm_wave.server import (
     ensure_vllm_on_path,
     resolve_model_arg_for_vllm_serve,
     first_model_id_from_api,
+    human_readable_model_name,
     port_in_use,
     start_ngrok,
     start_vllm,
@@ -47,6 +48,7 @@ class WizardResult:
     handles: ServerHandles
     base_url: str
     chat_model_id: str
+    chat_model_display: str
     ngrok_hint: str | None = None
 
 
@@ -319,6 +321,7 @@ class VllmHarnessApp(App[WizardResult | None]):
         chat_id = first_model_id_from_api(base) or os.path.basename(
             model_path.rstrip("/")
         )
+        chat_model_display = human_readable_model_name(model_path)
         handles = ServerHandles(
             vllm=proc,
             ngrok=ngrok_proc,
@@ -329,6 +332,7 @@ class VllmHarnessApp(App[WizardResult | None]):
             handles=handles,
             base_url=base,
             chat_model_id=chat_id,
+            chat_model_display=chat_model_display,
             ngrok_hint=ngrok_hint,
         )
 

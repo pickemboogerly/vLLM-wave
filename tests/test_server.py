@@ -107,6 +107,23 @@ def test_first_model_id_from_api_uses_base_url() -> None:
     assert "10.0.0.5" in str(p.call_args[0][0])
 
 
+def test_human_readable_model_name_from_hf_snapshot_path() -> None:
+    model = (
+        "/Users/x/.cache/huggingface/hub/models--mlx-community--gpt-oss-20b-MXFP4-Q8/"
+        "snapshots/123abc456def"
+    )
+    assert (
+        s.human_readable_model_name(model)
+        == "models--mlx-community/gpt-oss-20b-MXFP4-Q8"
+    )
+
+
+def test_human_readable_model_name_passthrough_for_hub_id() -> None:
+    assert s.human_readable_model_name("mlx-community/gpt-oss-20b-MXFP4-Q8") == (
+        "mlx-community/gpt-oss-20b-MXFP4-Q8"
+    )
+
+
 def test_wait_for_models_endpoint_success() -> None:
     proc = mock.Mock()
     proc.poll.return_value = None
